@@ -1,0 +1,66 @@
+using LinearAlgebra
+using SymPy
+using Plots
+
+# Plotting options
+plot_circle = true
+
+# Simulation parameters
+f = .5
+d = 1.99
+x0 = 0
+x0_prime = -.1
+y_0 = 0
+y0_prime = 
+
+# Define the matrix dimension
+mat_dimension = 1000  # Change this value to your desired dimension
+mat_coord_normalization = 1000 # Pixels (or values) per meter
+
+# Create a matrix with random values between 0 and 1
+matrix = zeros(mat_dimension, mat_dimension)
+
+# Loop that creates gaussian values for matrix and adds them together
+x_shift = .3
+y_shift = -.3
+
+std_dev = .1
+
+i_shift = mat_dimension/2
+j_shift = mat_dimension/2
+for i in 1:mat_dimension
+    x = (i - i_shift)/mat_coord_normalization
+    for j in 1:mat_dimension
+        y = (j - j_shift)/mat_coord_normalization
+        gaussian_value = exp(-1*((x-x_shift)^2 + (y-y_shift)^2)/(2*std_dev^2))
+        matrix[i,j] = gaussian_value
+    end
+end
+
+# Define the custom color gradient
+colors = cgrad([:white, :green], [0, 1])
+
+# Create the heat map
+x_range = range(-1/2*mat_dimension/mat_coord_normalization, stop=1/2*mat_dimension/mat_coord_normalization, length=mat_dimension)
+y_range = range(-1/2*mat_dimension/mat_coord_normalization, stop=1/2*mat_dimension/mat_coord_normalization, length=mat_dimension)
+
+p = heatmap(x_range, y_range, matrix, 
+            color = colors, title = "Heat Map", xlabel = "X-axis", ylabel = "Y-axis",
+            aspect_ratio = :equal)
+
+# Circle parameters
+circle_radius = std_dev
+theta = range(0, stop=2π, length=100)
+circle_x = circle_radius .* cos.(theta) .- x_shift
+circle_y = circle_radius .* sin.(theta) .- y_shift
+
+
+if plot_circle == true
+# Overlay the circle on the heatmap
+    plot!(
+        circle_x, circle_y, color=:black, linewidth=2, label=false
+    )
+end
+
+# Save the heat map as a PNG file
+savefig(p, "save_data_heatmap/heatmap.png")
