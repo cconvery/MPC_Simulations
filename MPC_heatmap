@@ -1,0 +1,245 @@
+using LinearAlgebra
+using SymPy
+using Plots
+using LaTeXStrings
+
+## Plotting options
+plot_circle = false
+even = false # determines which mirror we plot, (even mirror is second impact, odd mirror is first impact)
+
+## System options
+self_focusing = false
+half_pass = true
+stable_lens_mode = false # stable mode between lenses (q_in = q_out)
+stable_cell_mode = true # ideal circular beam path (not necessarily meeting reentrant condition)
+reentrant_condition = true # beam leaves where it enters (assumes constant focal length, f)
+rotated_basis = true
+
+## Define the matrix dimension
+mat_dimension = 2000  # Change this value to your desired dimension
+mat_coord_normalization = 20000 # Pixels (or values) per meter
+
+## Simulation parameters (manual entered, not necessarily what is run in simulation, which depend on "System Options")
+
+## Cell parameters
+
+# Controllable parameters
+num_passes = 40 # number of passes
+f = .5 # focal length (meters)
+
+# Parameters determined by stable mode conditions
+d = 1.9876883405951378 # distance between passes (meters)
+
+## Input beam parameters
+
+# Self Focusing
+sigma = .5
+
+# Controllable parameters
+x0 = .02 # initial x distance on mirror (meters)
+lambda = 1000 * 10^-9
+
+x0_rot = 0.0
+y0_rot = 0.0
+x0_prime_rot = 0.0
+y0_prime_rot = 0.0
+
+# Paremeters determined by stable mode conditions
+w0 = 0.00015778884111713673
+d_init = 0.9938441702975689 #.9, .95, 1.05, 1.10
+x0_prime = -0.02566821323104868 # 
+y0 = 0.001967542670615471 # initial x distance on mirror (meters)
+y0_prime = 0.0 # initial slope of input beam in x direction
+
+## Redefining parameters based on "System Options"
+
+# Stable mode conditions (d < 4f)
+nu = num_passes/2
+d_stable = (2*f) * (1 - cos(pi - (pi/nu)))
+if reentrant_condition == true
+    d = d_stable
+end
+
+if stable_lens_mode == true
+    d_init = d/2
+    w0 = ((lambda^2 * (4*f*d - d^2))/(4*pi^2))^(1/4) # (meters) beam waist radius before first lens
+end
+
+if self_focusing == true
+    d_init = d/2
+    w0 = ((sigma * lambda^2 * (4*f*d - d^2))/(4*pi^2))^(1/4) # (meters) beam waist radius before first lens
+end
+
+if stable_cell_mode == true # only free parameters is x0
+    x0_prime = -2 * x0 / d
+    y0 = x0 * sqrt((4*f)/d - 1)
+    y0_prime = 0
+end
+
+theta_rot = pi/2 + atan(y0/x0)
+x0_rot = cos(theta_rot) * x0 + sin(theta_rot) * y0
+y0_rot = cos(theta_rot) * y0 - sin(theta_rot) * x0
+x0_prime_rot = cos(theta_rot) * x0_prime + sin(theta_rot) * y0_prime
+y0_prime_rot = cos(theta_rot) * y0_prime - sin(theta_rot) * x0_prime
+
+if rotated_basis == true
+    x0 = x0_rot
+    y0 = y0_rot
+    x0_prime = x0_prime_rot
+    y0_prime = y0_prime_rot
+end
+
+y0_prime = y0_prime * 1.1
+
+## Solve for beam waist w(z) at each lens
+
+# Determine number of impacts on a given mirror (odd or even mirror)
+num_impacts = floor(Int, num_passes/2)
+if even == true
+    num_impacts = floor(Int, num_passes/2)
+elseif even == false
+    num_impacts = ceil(Int, num_passes/2)
+end
+
+# Matrices for constant non-swept parameters
+lens_mat = [1.0 0.0 ; -1.0/f 1]
+d_mat = [1.0 d ; 0.0 1.0]
+
+# Defining constant "q"
+q = pi * w0^2 / lambda
+
+# Defining matrices for lenses and "air gaps"
+d_init_mat = [1.0 d_init ; 0.0 1.0]
+
+# Defining ABCD matrix iteratively, num_passes = num_of_lenses
+ABCD_tensor = zeros(Float64, num_passes, 2, 2)
+
+for i in 1:num_passes
+    if i == 1
+        ABCD_tensor[i, :, :] = lens_mat * d_init_mat
+    else
+        ABCD_tensor[i, :, :] = lens_mat * d_mat * ABCD_tensor[i-1, :, :]
+    end
+end
+
+# Solving for position of each beam waist and for beam waist radius
+v = symbols("v")
+v_matrix = [1.0 v ; 0.0 1.0]
+
+v_vector = zeros(num_passes)
+w0_vector = zeros(num_passes)
+
+for i in 1:num_passes
+    ABCD_mat_sym = v_matrix * ABCD_tensor[i, :, :]
+
+    equation1 = ABCD_mat_sym[1,2] * ABCD_mat_sym[2,2] + q^2 * ABCD_mat_sym[1,1] * ABCD_mat_sym[2,1]
+    solution = solve(equation1, v)
+    v_vector[i] = N(solution[1])
+
+    ABCD_mat_sol = [subs(entry, v, v_vector[i]) for entry in ABCD_mat_sym]
+
+    A = ABCD_mat_sol[1,1]
+    B = ABCD_mat_sol[1,2]
+    C = ABCD_mat_sol[2,1]
+    D = ABCD_mat_sol[2,2]
+
+    w0_vector[i] = sqrt(w0^2 * (A^2 + B^2/(q^2)) / (A * D - B * C))
+
+end
+
+# Write code for finding beam waist at each lens (just use v_vector and w0_vector) w(z) = w0 sqrt(1+(z/z_r)^2), z_r = pi * w0^2 * n / lambda
+width_at_lens = zeros(num_impacts)
+for i in 0:num_impacts-1
+    if i == 0
+        z_r = pi * w0^2 / lambda
+        width_at_lens[i+1] = w0 * sqrt(1 + (d_init/z_r)^2)
+    else
+        z_r = pi * w0_vector[i]^2 / lambda
+        d_diff = d - v_vector[i]
+        width_at_lens[i+1] = w0_vector[i] * sqrt(1 + (d_diff/z_r)^2)
+    end
+end
+
+# Solve for x_n, and y_n
+x_n = zeros(num_passes)
+y_n = zeros(num_passes)
+theta = acos(1 - (d/(2*f)))
+
+for n in 1:num_passes
+    x_n[n] = x0 .* cos.((n-1) .* theta) + sqrt((d)/(4*f - d)) .* (x0 + 2*f*x0_prime) .* sin.((n-1) .* theta)
+    y_n[n] = y0 .* cos.((n-1) .* theta) + sqrt((d)/(4*f - d)) .* (y0 + 2*f*y0_prime) .* sin.((n-1) .* theta)
+end
+
+# Loop that creates gaussian values for matrix and adds them together
+i_shift = mat_dimension/2
+j_shift = mat_dimension/2
+
+if half_pass == true
+    num_impacts = Int(round(num_impacts/2))
+end
+
+matrix = zeros(mat_dimension, mat_dimension)
+for n in 1:num_impacts
+    for i in 1:mat_dimension
+        x = (i - i_shift)/mat_coord_normalization
+        for j in 1:mat_dimension
+            y = (j - j_shift)/mat_coord_normalization
+            if even == true
+                gaussian_value = (exp(-1*((x-x_n[2*n])^2 + (y-y_n[2*n])^2)/(width_at_lens[n]^2)))^2
+                matrix[i,j] = matrix[i,j] + gaussian_value
+            elseif even == false
+                gaussian_value = (exp(-1*((x-x_n[2*n-1])^2 + (y-y_n[2*n-1])^2)/(width_at_lens[n]^2)))^2
+                matrix[i,j] = matrix[i,j] + gaussian_value
+            end
+        end
+    end
+end
+
+# Define the custom color gradient
+
+# Create the heat map
+x_range = range(-1/2*mat_dimension/mat_coord_normalization, stop=1/2*mat_dimension/mat_coord_normalization, length=mat_dimension)
+y_range = range(-1/2*mat_dimension/mat_coord_normalization, stop=1/2*mat_dimension/mat_coord_normalization, length=mat_dimension)
+
+#plot_title = string("D = ", d)
+plot_title = ""
+p = heatmap(x_range, y_range, transpose(matrix), 
+            c=:jet1, title = plot_title, xlabel = "", ylabel = "",
+            aspect_ratio = :equal, label = L"Power \frac{P}{P_max}")
+
+for n in 1:num_impacts
+    # Circle parameters
+    circle_radius = 4 * width_at_lens[n]
+    theta_circle = range(0, stop=2π, length=100)
+    if even == true
+        circle_x = circle_radius .* cos.(theta_circle) .- x_n[2*n]
+        circle_y = circle_radius .* sin.(theta_circle) .- y_n[2*n]
+    elseif even == false
+        circle_x = circle_radius .* cos.(theta_circle) .- x_n[2*n-1]
+        circle_y = circle_radius .* sin.(theta_circle) .- y_n[2*n-1]
+    end
+
+    if plot_circle == true
+    # Overlay the circle on the heatmap
+        plot!(
+            circle_x, circle_y, color=:black, linewidth=2, label=false
+        )
+    end
+end
+
+## Print output of simulation
+println("Number of passes: ", num_passes)
+println("Focal length: ", f)
+println("Distance between lenses: ", d)
+println("Wavelength of light: ", lambda)
+println("Initial beam waist: ", w0)
+println("Distance of beam waist to first lens: ", d_init)
+println("Input beam x displacement: ", x0)
+println("Input beam gradient in x direction: ", x0_prime)
+println("Input beam y displacement: ", y0)
+println("Input beam gradient in y direction: ", y0_prime)
+
+folder_tag = "save_data_heatmap/heatmap_writeup_y0_prime_4.png"
+
+## Save the heat map as a PNG file
+savefig(p, folder_tag)
